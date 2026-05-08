@@ -1,0 +1,17 @@
+diff --git a/Loop/Loop/Models/LoopConstants.swift b/Loop/Loop/Models/LoopConstants.swift
+index fb69c827..2a5ffe86 100644
+--- a/Loop/Loop/Models/LoopConstants.swift
++++ b/Loop/Loop/Models/LoopConstants.swift
+@@ -22,7 +22,11 @@ enum LoopConstants {
+     static let validManualGlucoseEntryRange = HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 10)...HKQuantity(unit: .milligramsPerDeciliter, doubleValue: 600)
+     
+     static let minCarbAbsorptionTime = TimeInterval(minutes: 30)
+-    static let maxCarbAbsorptionTime = TimeInterval(hours: 8)
++    // CUSTOM (rdeboer180): raised 8h -> 12h to support late-evening high-fat/fiber
++    // dessert entries (Friday/Saturday recurring meal). UI/entry validation reads
++    // this; pairs with LoopKit CarbMath.maximumAbsorptionTimeInterval bump.
++    // Revert: remove patches/01-extend-carb-absorption-time-12h.patch.
++    static let maxCarbAbsorptionTime = TimeInterval(hours: 12)
+     
+     static let maxCarbEntryPastTime = TimeInterval(hours: (-12))
+     static let maxCarbEntryFutureTime = TimeInterval(hours: 1)
