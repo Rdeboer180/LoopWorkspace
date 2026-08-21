@@ -221,8 +221,14 @@ jobs:
           # cannot apply on top. The 1h -> 4h bump for maxCarbEntryFutureTime
           # is folded into that patch instead. Re-add this entry only if you
           # also remove the matching block from the local patch.
-          # Loop: Update Absorption Times
-          curl https://github.com/Rdeboer180/Loop/commit/62cb3ddba02ff0329aeec6aa9b155e3e41b43466.patch | git apply -v --directory=Loop
+          # CUSTOM (rdeboer180): "Loop: Update Absorption Times" removed -- it
+          # rewrote defaultCarbAbsorptionTimes (fast 90m / medium 4h / slow 6h)
+          # and cannot apply on top of patches/02-fast-carb-absorption-2.5h.patch,
+          # which rewrites the same line. That patch now sets the whole tuple
+          # (fast 2.5h / medium 4h / slow 6h), preserving the 4h/6h values this
+          # customization used to supply. Re-add the line below only if you also
+          # delete patch 02.
+          # curl https://github.com/Rdeboer180/Loop/commit/62cb3ddba02ff0329aeec6aa9b155e3e41b43466.patch | git apply -v --directory=Loop
           
           # the final customization listed above CANNOT have a continuation character
           # more customizations can be pasted after this line
