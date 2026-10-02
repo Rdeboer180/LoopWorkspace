@@ -214,9 +214,10 @@ jobs:
 
           # LoopWorkspace patches
           # -applies any patches located in the LoopWorkspace/patches/ directory
-          if $(ls ./patches/* &> /dev/null); then
-          git apply ./patches/* --allow-empty -v --whitespace=fix
-          fi
+          # Fail the build if a customization no longer applies after an update.
+          # Only patch files are input; documentation in patches/ is ignored.
+          git apply --check ./patches/*.patch
+          git apply ./patches/*.patch -v --whitespace=fix
 
           # Submodule Loop patches:
           # Template for customizing submodule Loop (changes Loop app name to "CustomLoop")

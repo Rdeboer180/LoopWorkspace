@@ -1,0 +1,28 @@
+diff --git a/LoopKit/LoopKitUI/Extensions/Environment+Authenticate.swift b/LoopKit/LoopKitUI/Extensions/Environment+Authenticate.swift
+--- a/LoopKit/LoopKitUI/Extensions/Environment+Authenticate.swift
++++ b/LoopKit/LoopKitUI/Extensions/Environment+Authenticate.swift
+@@ -15,21 +15,9 @@
+ 
+ public struct LocalAuthentication {
+     public static let deviceOwnerCheck: AuthenticationChallenge = { authenticationChallengeDescription, completion in
+-        let context = LAContext()
+-        var error: NSError?
+-        if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
+-            context.evaluatePolicy(.deviceOwnerAuthentication,
+-                                   localizedReason: authenticationChallengeDescription,
+-                                   reply: { (success, error) in
+-                                    DispatchQueue.main.async {
+-                                        assert(success || error != nil)
+-                                        completion(success ? .success(()) : .failure(error ?? UnknownError()))
+-                                    }
+-            })
+-        } else {
+-            // The logic here is to not fail to execute completion just because there is no authentication set up on the iPhone
+-            completion(.success(()))
+-        }
++        // CUSTOM: skip device authentication for Loop bolus and settings actions.
++        completion(.success(()))
++
+     }
+ }
+ 
