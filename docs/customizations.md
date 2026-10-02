@@ -1,6 +1,6 @@
 # Customizations in this workspace
 
-Compared with upstream/update_dev_to_3.14.4, this branch keeps a forked LoopKit with parabolic carbohydrate absorption, the 🥜12h delayed dessert curve (including legacy 🌙 labels), the 🍲8h heavy-meal curve, and a 12-hour model absorption ceiling.
+Based on upstream/main (Loop 3.14.8), merged into Rdeboer180-patch-AT, this branch keeps a forked LoopKit with parabolic carbohydrate absorption, the 🥜12h delayed dessert curve (including legacy 🌙 labels), the 🍲8h heavy-meal curve, and a 12-hour model absorption ceiling.
 
 Both GitHub build workflows apply the local patches before building:
 
