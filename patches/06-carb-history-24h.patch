@@ -1,0 +1,218 @@
+--- a/Loop/Loop/View Controllers/CarbAbsorptionViewController.swift
++++ b/Loop/Loop/View Controllers/CarbAbsorptionViewController.swift
+@@ -97,6 +97,9 @@
+ 
+     private var carbStatuses: [CarbStatus<StoredCarbEntry>] = []
+ 
++    // CUSTOM (rdeboer180): expand the displayed entry history without changing stored meals. Revert with patch 06.
++    private var showingPast24Hours = false
++
+     private var carbsOnBoard: CarbValue?
+ 
+     private var carbTotal: CarbValue?
+@@ -138,8 +141,12 @@
+         charts.startDate = chartStartDate
+         charts.updateEndDate(chartStartDate.addingTimeInterval(.hours(totalHours+1))) // When there is no data, this allows presenting current hour + 1
+ 
+-        let midnight = Calendar.current.startOfDay(for: Date())
+-        let listStart = min(midnight, chartStartDate, Date(timeIntervalSinceNow: -deviceManager.carbStore.maximumAbsorptionTimeInterval))
++        let now = Date()
++        let midnight = Calendar.current.startOfDay(for: now)
++        // CUSTOM (rdeboer180): a rolling 24-hour history includes fully absorbed meals, but excludes future entries.
++        let listStart = min(midnight, chartStartDate, now.addingTimeInterval(-deviceManager.carbStore.maximumAbsorptionTimeInterval))
++        let historyStart = now.addingTimeInterval(-.hours(24))
++        let loadHistory = showingPast24Hours
+ 
+         let reloadGroup = DispatchGroup()
+         let shouldUpdateGlucose = currentContext.contains(.glucose)
+@@ -150,6 +157,7 @@
+         var carbsOnBoard: CarbValue?
+         var carbTotal: CarbValue?
+         var insulinCounteractionEffects: [GlucoseEffectVelocity]?
++        var historyError: Error?
+ 
+         // TODO: Don't always assume currentContext.contains(.status)
+         reloadGroup.enter()
+@@ -162,7 +170,9 @@
+                 self.deviceManager.carbStore.getCarbStatus(start: listStart, end: nil, effectVelocities: allInsulinCounteractionEffects) { (result) in
+                     switch result {
+                     case .success(let status):
+-                        carbStatuses = status
++                        if !loadHistory {
++                            carbStatuses = status
++                        }
+                         carbsOnBoard = status.getClampedCarbsOnBoard()
+                     case .failure(let error):
+                         self.log.error("CarbStore failed to get carbStatus: %{public}@", String(describing: error))
+@@ -172,6 +182,21 @@
+                     reloadGroup.leave()
+                 }
+ 
++                // CUSTOM (rdeboer180): history has its own query; the COB header keeps its existing recent-meal calculation.
++                if loadHistory {
++                    reloadGroup.enter()
++                    self.deviceManager.carbStore.getCarbStatus(start: historyStart, end: now, effectVelocities: allInsulinCounteractionEffects) { result in
++                        switch result {
++                        case .success(let status):
++                            carbStatuses = status
++                        case .failure(let error):
++                            historyError = error
++                            retryContext.update(with: .carbs)
++                        }
++                        reloadGroup.leave()
++                    }
++                }
++
+                 reloadGroup.enter()
+                 self.deviceManager.carbStore.getGlucoseEffects(start: chartStartDate, end: nil, effectVelocities: allInsulinCounteractionEffects) { (result) in
+                     switch result {
+@@ -217,6 +242,9 @@
+ 
+             self.charts.prerender()
+ 
++            // CUSTOM (rdeboer180): re-enable the history action before rendering its refreshed state.
++            self.reloading = false
++
+             for case let cell as ChartTableViewCell in self.tableView.visibleCells {
+                 cell.reloadChart()
+             }
+@@ -231,14 +259,18 @@
+ 
+                 self.carbsOnBoard = carbsOnBoard
+ 
+-                self.tableView.reloadSections(IndexSet(integer: Section.entries.rawValue), with: .fade)
++                self.tableView.reloadSections(IndexSet([Section.entries.rawValue, Section.history.rawValue]), with: .fade)
+             }
+ 
+             if let cell = self.tableView.cellForRow(at: IndexPath(row: 0, section: Section.totals.rawValue)) as? HeaderValuesTableViewCell {
+                 self.updateCell(cell)
+             }
+ 
+-            self.reloading = false
++            self.tableView.reloadSections(IndexSet(integer: Section.history.rawValue), with: .none)
++            if let error = historyError {
++                self.present(UIAlertController(with: error), animated: true)
++            }
++
+             let reloadNow = !self.refreshContext.isEmpty
+             self.refreshContext.formUnion(retryContext)
+ 
+@@ -255,8 +287,10 @@
+         case charts
+         case totals
+         case entries
++        // CUSTOM (rdeboer180): history action sits below the meal list, including when it is empty.
++        case history
+ 
+-        static let count = 3
++        static let count = 4
+     }
+ 
+     private enum ChartRow: Int {
+@@ -287,6 +321,21 @@
+         return formatter
+     }()
+ 
++    // CUSTOM (rdeboer180): include the date when history crosses midnight. Revert with patch 06.
++    private lazy var historyTimeFormatter: DateFormatter = {
++        let formatter = DateFormatter()
++        formatter.dateStyle = .short
++        formatter.timeStyle = .short
++        return formatter
++    }()
++
++    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
++        if section == Section.entries.rawValue && showingPast24Hours {
++            return NSLocalizedString("Past 24 Hours", comment: "Header for the rolling 24-hour carb entry history")
++        }
++        return super.tableView(tableView, titleForHeaderInSection: section)
++    }
++
+     override func numberOfSections(in tableView: UITableView) -> Int {
+         return Section.count
+     }
+@@ -299,6 +348,8 @@
+             return 1
+         case .entries:
+             return carbStatuses.count
++        case .history:
++            return 1
+         }
+     }
+ 
+@@ -325,6 +376,21 @@
+             updateCell(cell)
+ 
+             return cell
++        case .history:
++            // CUSTOM (rdeboer180): native accessible button row; no storyboard changes needed.
++            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
++            cell.textLabel?.text = reloading
++                ? NSLocalizedString("Loading carb entries…", comment: "Loading state of carb history action")
++                : showingPast24Hours
++                    ? NSLocalizedString("Show recent carbs", comment: "Return from 24-hour carb history to the recent list")
++                    : NSLocalizedString("See past 24 hours", comment: "Show all carb entries in the preceding 24 hours")
++            cell.textLabel?.font = .preferredFont(forTextStyle: .body)
++            cell.textLabel?.adjustsFontForContentSizeCategory = true
++            cell.textLabel?.numberOfLines = 0
++            cell.textLabel?.textAlignment = .center
++            cell.textLabel?.textColor = reloading ? .secondaryLabel : view.tintColor
++            cell.accessibilityTraits = reloading ? [.button, .notEnabled] : .button
++            return cell
+         case .entries:
+             let unit = HKUnit.gram()
+             let cell = tableView.dequeueReusableCell(withIdentifier: CarbEntryTableViewCell.className, for: indexPath) as! CarbEntryTableViewCell
+@@ -343,7 +409,7 @@
+             }
+ 
+             // Entry time
+-            let startTime = timeFormatter.string(from: status.entry.startDate)
++            let startTime = (showingPast24Hours ? historyTimeFormatter : timeFormatter).string(from: status.entry.startDate)
+             if  let absorptionTime = status.entry.absorptionTime,
+                 let duration = absorptionFormatter.string(from: absorptionTime)
+             {
+@@ -440,7 +506,7 @@
+ 
+     override func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
+         switch Section(rawValue: indexPath.section)! {
+-        case .charts, .totals:
++        case .charts, .totals, .history:
+             return false
+         case .entries:
+             return allowEditing && carbStatuses[indexPath.row].entry.createdByCurrentApp
+@@ -475,6 +541,8 @@
+             return 66
+         case .entries:
+             return 66
++        case .history:
++            return 44
+         }
+     }
+ 
+@@ -484,14 +552,25 @@
+             return indexPath
+         case .totals:
+             return nil
++        case .history:
++            return reloading ? nil : indexPath
+         case .entries:
+             return (allowEditing && carbStatuses[indexPath.row].entry.createdByCurrentApp) ? indexPath : nil
+         }
+     }
+     
+     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+-        guard indexPath.row < carbStatuses.count else { return }
+         tableView.deselectRow(at: indexPath, animated: true)
++        // CUSTOM (rdeboer180): handle history before indexing entries; charts must not open a meal editor.
++        if indexPath.section == Section.history.rawValue {
++            guard !reloading else { return }
++            showingPast24Hours.toggle()
++            refreshContext.formUnion([.carbs, .glucose])
++            reloadData(animated: true)
++            tableView.reloadSections(IndexSet(integer: Section.history.rawValue), with: .none)
++            return
++        }
++        guard indexPath.section == Section.entries.rawValue, indexPath.row < carbStatuses.count else { return }
+         
+         let originalCarbEntry = carbStatuses[indexPath.row].entry
+         
