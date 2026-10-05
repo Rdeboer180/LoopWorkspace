@@ -1,0 +1,293 @@
+diff --git a/Loop/Loop/View Controllers/CarbAbsorptionViewController.swift b/Loop/Loop/View Controllers/CarbAbsorptionViewController.swift
+index 419c707c..9a934b52 100644
+--- a/Loop/Loop/View Controllers/CarbAbsorptionViewController.swift	
++++ b/Loop/Loop/View Controllers/CarbAbsorptionViewController.swift	
+@@ -495,7 +495,8 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
+         
+         let originalCarbEntry = carbStatuses[indexPath.row].entry
+         
+-        let viewModel = CarbEntryViewModel(delegate: deviceManager, originalCarbEntry: originalCarbEntry)
++        // CUSTOM (rdeboer180): carry the same observed amount shown on this row into Save to Favorites. Revert with patch 05.
++        let viewModel = CarbEntryViewModel(delegate: deviceManager, originalCarbEntry: originalCarbEntry, absorption: carbStatuses[indexPath.row].absorption)
+         let carbEntryView = CarbEntryView(viewModel: viewModel)
+             .environmentObject(deviceManager.displayGlucosePreference)
+             .environment(\.dismissAction, carbEditWasCanceled)
+diff --git a/Loop/Loop/View Models/AddEditFavoriteFoodViewModel.swift b/Loop/Loop/View Models/AddEditFavoriteFoodViewModel.swift
+index 5bd6eb87..25099c4c 100644
+--- a/Loop/Loop/View Models/AddEditFavoriteFoodViewModel.swift	
++++ b/Loop/Loop/View Models/AddEditFavoriteFoodViewModel.swift	
+@@ -54,11 +54,42 @@ final class AddEditFavoriteFoodViewModel: ObservableObject {
+         }
+     }
+     
+-    init(carbsQuantity: Double?, foodType: String, absorptionTime: TimeInterval, onSave: @escaping (NewFavoriteFood) -> ()) {
++    // CUSTOM (rdeboer180): copy recorded values first; observed carbs require an explicit opt-in. Revert with patch 05.
++    init(carbsQuantity: Double?, foodType: String, absorptionTime: TimeInterval, absorption: AbsorbedCarbValue? = nil, onSave: @escaping (NewFavoriteFood) -> ()) {
+         self.onSave = onSave
+         self.carbsQuantity = carbsQuantity
+         self.foodType = foodType
+         self.absorptionTime = absorptionTime
++        self.recordedCarbsQuantity = carbsQuantity
++        self.favoriteAbsorption = absorption
++    }
++
++    // CUSTOM (rdeboer180): retain the original draft amount and the row's estimate independently. Revert with patch 05.
++    private(set) var recordedCarbsQuantity: Double?
++    private var favoriteAbsorption: AbsorbedCarbValue?
++
++    var observedCarbsQuantity: Double? {
++        guard let absorption = favoriteAbsorption else { return nil }
++        let grams = absorption.observed.doubleValue(for: preferredCarbUnit)
++        return grams.isFinite && grams > 0 ? grams : nil
++    }
++
++    var absorptionIsActive: Bool {
++        favoriteAbsorption?.isActive ?? false
++    }
++
++    var canUseObservedCarbs: Bool {
++        guard let grams = observedCarbsQuantity else { return false }
++        return !absorptionIsActive && grams <= maxCarbEntryQuantity.doubleValue(for: preferredCarbUnit)
++    }
++
++    func useObservedCarbs() {
++        guard canUseObservedCarbs else { return }
++        carbsQuantity = observedCarbsQuantity
++    }
++
++    func useRecordedCarbs() {
++        carbsQuantity = recordedCarbsQuantity
+     }
+     
+     var originalFavoriteFood: StoredFavoriteFood?
+diff --git a/Loop/Loop/View Models/CarbEntryViewModel.swift b/Loop/Loop/View Models/CarbEntryViewModel.swift
+index 37dedee3..b8d3b2dc 100644
+--- a/Loop/Loop/View Models/CarbEntryViewModel.swift	
++++ b/Loop/Loop/View Models/CarbEntryViewModel.swift	
+@@ -100,9 +100,11 @@ final class CarbEntryViewModel: ObservableObject {
+     }
+     
+     /// Initalizer for when`CarbEntryView` has an entry to edit
+-    init(delegate: CarbEntryViewModelDelegate, originalCarbEntry: StoredCarbEntry) {
++    // CUSTOM (rdeboer180): pass the selected meal's absorption into the favorite draft. Revert with patch 05.
++    init(delegate: CarbEntryViewModelDelegate, originalCarbEntry: StoredCarbEntry, absorption: AbsorbedCarbValue? = nil) {
+         self.delegate = delegate
+         self.originalCarbEntry = originalCarbEntry
++        self.favoriteAbsorption = absorption
+         self.defaultAbsorptionTimes = delegate.defaultAbsorptionTimes
+ 
+         self.carbsQuantity = originalCarbEntry.quantity.doubleValue(for: preferredCarbUnit)
+@@ -113,8 +115,13 @@ final class CarbEntryViewModel: ObservableObject {
+         self.usesCustomFoodType = true
+         self.shouldBeginEditingQuantity = false
+         
++        // CUSTOM (rdeboer180): edited meals must persist favorites too; do not observe favorite selection here.
++        observeFavoriteFoodChange()
+         observeLoopUpdates()
+     }
++
++    // CUSTOM (rdeboer180): snapshot matching the Active Carbohydrates row, never a change to the meal. Revert with patch 05.
++    private(set) var favoriteAbsorption: AbsorbedCarbValue?
+     
+     var originalCarbEntry: StoredCarbEntry? = nil
+     private var favoriteFood: FavoriteFood? = nil
+@@ -214,7 +221,10 @@ final class CarbEntryViewModel: ObservableObject {
+     func onFavoriteFoodSave(_ food: NewFavoriteFood) {
+         let newStoredFood = StoredFavoriteFood(name: food.name, carbsQuantity: food.carbsQuantity, foodType: food.foodType, absorptionTime: food.absorptionTime)
+         favoriteFoods.append(newStoredFood)
+-        selectedFavoriteFoodIndex = favoriteFoods.count - 1
++        // CUSTOM (rdeboer180): saving a past meal must not apply the favorite back to its recorded entry.
++        if originalCarbEntry == nil {
++            selectedFavoriteFoodIndex = favoriteFoods.count - 1
++        }
+     }
+     
+     private func observeFavoriteFoodIndexChange() {
+diff --git a/Loop/Loop/Views/AddEditFavoriteFoodView.swift b/Loop/Loop/Views/AddEditFavoriteFoodView.swift
+index 0e2d9eba..5e647ca0 100644
+--- a/Loop/Loop/Views/AddEditFavoriteFoodView.swift
++++ b/Loop/Loop/Views/AddEditFavoriteFoodView.swift
+@@ -27,8 +27,9 @@ struct AddEditFavoriteFoodView: View {
+     }
+     
+     /// Initializer for presenting the `AddEditFavoriteFoodView` prepopulated from the `CarbEntryView`
+-    init(carbsQuantity: Double?, foodType: String, absorptionTime: TimeInterval, onSave: @escaping (NewFavoriteFood) -> Void) {
+-        self._viewModel = StateObject(wrappedValue: AddEditFavoriteFoodViewModel(carbsQuantity: carbsQuantity, foodType: foodType, absorptionTime: absorptionTime, onSave: onSave))
++    // CUSTOM (rdeboer180): reuse the favorite editor with optional past-meal evidence. Revert with patch 05.
++    init(carbsQuantity: Double?, foodType: String, absorptionTime: TimeInterval, absorption: AbsorbedCarbValue? = nil, onSave: @escaping (NewFavoriteFood) -> Void) {
++        self._viewModel = StateObject(wrappedValue: AddEditFavoriteFoodViewModel(carbsQuantity: carbsQuantity, foodType: foodType, absorptionTime: absorptionTime, absorption: absorption, onSave: onSave))
+     }
+     
+     var body: some View {
+@@ -76,6 +77,12 @@ struct AddEditFavoriteFoodView: View {
+             ScrollView {
+                 card
+                     .padding(.top, 8)
++
++                // CUSTOM (rdeboer180): evidence sits beside the explicit choice; defaults remain the recorded values.
++                if let observed = viewModel.observedCarbsQuantity {
++                    absorbedCarbsCard(observed)
++                        .padding(.top, 8)
++                }
+                 
+                 saveActionButton
+             }
+@@ -113,6 +120,49 @@ struct AddEditFavoriteFoodView: View {
+         .background(CardBackground())
+         .padding(.horizontal)
+     }
++
++    // CUSTOM (rdeboer180): the estimate changes only this favorite draft; an active meal is still partial. Revert with patch 05.
++    private func absorbedCarbsCard(_ observed: Double) -> some View {
++        VStack(alignment: .leading, spacing: 12) {
++            Text("\(formattedGrams(observed)) g absorbed")
++                .font(.headline)
++            Text(viewModel.absorptionIsActive
++                 ? "Absorption is still in progress. This is a partial estimate; keep the recorded amount for now."
++                 : "Loop estimated this amount from your glucose response. You can use it for this favorite or keep the recorded amount.")
++                .font(.footnote)
++                .foregroundColor(.secondary)
++
++            if let recorded = viewModel.recordedCarbsQuantity {
++                Button(action: viewModel.useRecordedCarbs) {
++                    Text("Use recorded amount: \(formattedGrams(recorded)) g")
++                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
++                }
++            }
++            Button(action: viewModel.useObservedCarbs) {
++                Text("Use absorbed estimate: \(formattedGrams(observed)) g")
++                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
++            }
++            .disabled(!viewModel.canUseObservedCarbs)
++            if !viewModel.absorptionIsActive && !viewModel.canUseObservedCarbs {
++                Text("This estimate exceeds the maximum carb entry amount.")
++                    .font(.footnote)
++                    .foregroundColor(.secondary)
++            }
++            Text("Saving adds a favorite. Your past meal stays as recorded.")
++                .font(.footnote)
++                .foregroundColor(.secondary)
++        }
++        .padding()
++        .background(CardBackground())
++        .padding(.horizontal)
++    }
++
++    private func formattedGrams(_ grams: Double) -> String {
++        let formatter = NumberFormatter()
++        formatter.numberStyle = .decimal
++        formatter.maximumFractionDigits = 1
++        return formatter.string(from: NSNumber(value: grams)) ?? String(grams)
++    }
+     
+     private func alert(for alert: AddEditFavoriteFoodViewModel.Alert) -> SwiftUI.Alert {
+         switch alert {
+diff --git a/Loop/Loop/Views/CarbEntryView.swift b/Loop/Loop/Views/CarbEntryView.swift
+index 5831836f..bb374fce 100644
+--- a/Loop/Loop/Views/CarbEntryView.swift
++++ b/Loop/Loop/Views/CarbEntryView.swift
+@@ -72,6 +72,16 @@ struct CarbEntryView: View, HorizontalSizeClassOverride {
+                     .padding(.top, 8)
+                 
+                 continueActionButton
++
++                // CUSTOM (rdeboer180): past meals can become favorites without continuing into bolus entry. Revert with patch 05.
++                if !isNewEntry {
++                    Button(action: saveAsFavoriteFood) {
++                        Text("Save to Favorites")
++                            .frame(maxWidth: .infinity, minHeight: 44)
++                    }
++                    .padding(.horizontal)
++                    .disabled(viewModel.saveFavoriteFoodButtonDisabled)
++                }
+                 
+                 if isNewEntry, FeatureFlags.allowExperimentalFeatures {
+                     favoriteFoodsCard
+@@ -88,7 +98,8 @@ struct CarbEntryView: View, HorizontalSizeClassOverride {
+         }
+         .alert(item: $viewModel.alert, content: alert(for:))
+         .sheet(isPresented: $showAddFavoriteFood, onDismiss: clearExpandedRow) {
+-            AddEditFavoriteFoodView(carbsQuantity: $viewModel.carbsQuantity.wrappedValue, foodType: $viewModel.foodType.wrappedValue, absorptionTime: $viewModel.absorptionTime.wrappedValue, onSave: onFavoriteFoodSave(_:))
++            // CUSTOM (rdeboer180): draft copies editor values; the optional absorption choice only edits the favorite.
++            AddEditFavoriteFoodView(carbsQuantity: $viewModel.carbsQuantity.wrappedValue, foodType: $viewModel.foodType.wrappedValue, absorptionTime: $viewModel.absorptionTime.wrappedValue, absorption: viewModel.favoriteAbsorption, onSave: onFavoriteFoodSave(_:))
+         }
+         .sheet(isPresented: $showHowAbsorptionTimeWorks) {
+             HowAbsorptionTimeWorksView()
+diff --git a/Loop/LoopTests/LoopTests.swift b/Loop/LoopTests/LoopTests.swift
+index b29b1d5c..0d8dfba5 100644
+--- a/Loop/LoopTests/LoopTests.swift
++++ b/Loop/LoopTests/LoopTests.swift
+@@ -7,11 +7,73 @@
+ //
+ 
+ import XCTest
++import HealthKit
++@testable import LoopKit
+ 
+ @testable import Loop
+ 
+ class LoopTests: XCTestCase {}
+ 
++// CUSTOM (rdeboer180): regression coverage for past-meal favorite drafts. Revert with patch 05.
++final class PastMealFavoriteTests: XCTestCase {
++    private func absorption(observed: Double, active: Bool = false) -> AbsorbedCarbValue {
++        AbsorbedCarbValue(
++            observed: HKQuantity(unit: .gram(), doubleValue: observed),
++            clamped: HKQuantity(unit: .gram(), doubleValue: min(observed, 60)),
++            total: HKQuantity(unit: .gram(), doubleValue: 60),
++            remaining: HKQuantity(unit: .gram(), doubleValue: active ? 30 : 0),
++            observedDate: DateInterval(start: Date(timeIntervalSince1970: 0), duration: 3600),
++            estimatedTimeRemaining: active ? 3600 : 0,
++            timeToAbsorbObservedCarbs: 3600
++        )
++    }
++
++    func testFinishedEstimateRequiresOptInAndPreservesDurationAndMarker() {
++        var saved: NewFavoriteFood?
++        let model = AddEditFavoriteFoodViewModel(carbsQuantity: 60, foodType: "🥜12h", absorptionTime: .hours(12), absorption: absorption(observed: 82.5)) { saved = $0 }
++        model.name = "Peanut dessert"
++        XCTAssertEqual(model.carbsQuantity, 60)
++        XCTAssertEqual(model.observedCarbsQuantity, 82.5)
++        XCTAssertTrue(model.canUseObservedCarbs)
++        model.useObservedCarbs()
++        model.save()
++        XCTAssertEqual(saved?.carbsQuantity.doubleValue(for: .gram()), 82.5)
++        XCTAssertEqual(saved?.absorptionTime, .hours(12))
++        XCTAssertEqual(saved?.foodType, "🥜12h")
++        XCTAssertEqual(model.recordedCarbsQuantity, 60)
++        model.useRecordedCarbs()
++        XCTAssertEqual(model.carbsQuantity, 60)
++    }
++
++    func testActiveAbsorptionIsVisibleButCannotReplaceTheRecordedAmount() {
++        let model = AddEditFavoriteFoodViewModel(carbsQuantity: 60, foodType: "🍲8h", absorptionTime: .hours(8), absorption: absorption(observed: 30, active: true)) { _ in }
++        XCTAssertEqual(model.observedCarbsQuantity, 30)
++        XCTAssertTrue(model.absorptionIsActive)
++        XCTAssertFalse(model.canUseObservedCarbs)
++        model.useObservedCarbs()
++        XCTAssertEqual(model.carbsQuantity, 60)
++    }
++
++    func testMissingAbsorptionStillAllowsSavingRecordedValues() {
++        var saved: NewFavoriteFood?
++        let model = AddEditFavoriteFoodViewModel(carbsQuantity: 60, foodType: "🥜12h", absorptionTime: .hours(12)) { saved = $0 }
++        model.name = "Peanut dessert"
++        XCTAssertNil(model.observedCarbsQuantity)
++        XCTAssertFalse(model.canUseObservedCarbs)
++        model.save()
++        XCTAssertEqual(saved?.carbsQuantity.doubleValue(for: .gram()), 60)
++    }
++
++    func testInvalidOrExcessiveEstimateCannotReplaceRecordedValues() {
++        for grams in [-1.0, 0, Double.nan, Double.infinity, 1000] {
++            let model = AddEditFavoriteFoodViewModel(carbsQuantity: 60, foodType: "🍲8h", absorptionTime: .hours(8), absorption: absorption(observed: grams)) { _ in }
++            XCTAssertFalse(model.canUseObservedCarbs)
++            model.useObservedCarbs()
++            XCTAssertEqual(model.carbsQuantity, 60)
++        }
++    }
++}
++
+ extension XCTestCase {
+     
+     func waitOnMain(timeout: TimeInterval = 1.0, file: StaticString = #file, function: String = #function, line: UInt = #line) {
