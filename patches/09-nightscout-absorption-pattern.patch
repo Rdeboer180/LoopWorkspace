@@ -1,0 +1,30 @@
+diff --git a/NightscoutService/NightscoutServiceKit/Extensions/SyncCarbObject.swift b/NightscoutService/NightscoutServiceKit/Extensions/SyncCarbObject.swift
+index 3122df4..7a1497e 100644
+--- a/NightscoutService/NightscoutServiceKit/Extensions/SyncCarbObject.swift
++++ b/NightscoutService/NightscoutServiceKit/Extensions/SyncCarbObject.swift
+@@ -22,10 +22,25 @@ extension SyncCarbObject {
+             carbs: lround(grams),
+             absorptionTime: absorptionTime,
+             foodType: foodType,
++            notes: absorptionPatternNote,  // CUSTOM (rdeboer180): per-entry absorption pattern marker for LoopStack. Revert: delete this line and `absorptionPatternNote` below.
+             syncIdentifier: syncIdentifier,
+             userEnteredAt: userCreatedDate,
+             userLastModifiedAt: userUpdatedDate
+         )
+     }
+ 
++    // CUSTOM (rdeboer180): Nightscout has no field for the fork's per-entry
++    // `absorptionPatternIdentifier`, and LoopStack must grade each entry
++    // against the curve Loop actually used. Surface the identifier as a stable
++    // bracketed marker in the treatment notes — "[delayed-metabolic-v1]" or
++    // "[standard-v1]" — which LoopStack's `absorptionPatternFromNotes` parses.
++    // Entries with no identifier (legacy 🥜12h / 🍲8h text markers, Watch and
++    // remote entries) keep notes nil, exactly as before. Loop never reads carb
++    // treatments back from Nightscout, so this is upload-only and changes no
++    // dosing. Revert: delete this property and the `notes:` argument above.
++    private var absorptionPatternNote: String? {
++        guard let identifier = absorptionPatternIdentifier, !identifier.isEmpty else { return nil }
++        return "[\(identifier)]"
++    }
++
+ }

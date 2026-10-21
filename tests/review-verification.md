@@ -75,3 +75,94 @@ so LoopStack cannot yet grade these entries against the new curve.
 - `xcodebuild -workspace LoopWorkspace.xcworkspace -scheme LoopWorkspace -configuration Release -destination generic/platform=iOS` (fastlane's scheme and configuration) on the CI tree with signing disabled: **BUILD SUCCEEDED**; `MealToolsView.swift` and `PresetRemindersView.swift` compiled; the only warning in a touched file is the pre-existing upstream `String: Identifiable` conformance in SettingsView.
 - Local prerequisites that CI already has: the watchOS 26.5 platform (installed during this review) and TrueTime's nested `External/xcconfigs` submodule (initialised recursively).
 - Two earlier attempts with `-scheme Loop` failed before compiling anything ("unable to resolve module dependency: 'LoopKit'" in LoopCore) because that scheme relies on implicit dependencies; CI does not use it.
+
+## Nightscout absorption-pattern marker and LoopStack lockstep (October 21, 2026)
+
+Closes the gap noted above ("Nightscout does not receive the pattern
+identifier"). No dosing change on either side.
+
+- `patches/09-nightscout-absorption-pattern.patch` (NightscoutService is a
+  submodule with no fork, so this is a workspace patch like 07). It edits one
+  file, `NightscoutService/NightscoutServiceKit/Extensions/SyncCarbObject.swift`:
+  the carb treatment's `notes` becomes `"[<absorptionPatternIdentifier>]"`
+  (`[delayed-metabolic-v1]` or `[standard-v1]`) when the entry carries an
+  identifier, and stays `nil` otherwise, so legacy 🥜12h / 🌙12h / 🍲8h
+  entries, Watch entries and remote entries upload exactly as before.
+  `CarbCorrectionNightscoutTreatment` already accepted `notes`; nothing in
+  NightscoutKit changes. Loop never reads carb treatments back from
+  Nightscout, so the marker is upload-only. Every added line carries a
+  `CUSTOM (rdeboer180)` marker.
+  **Revert:** delete the patch file (CI applies whatever is in `patches/`);
+  locally, `git -C NightscoutService checkout -- NightscoutServiceKit/Extensions/SyncCarbObject.swift`.
+  Entries uploaded while the patch was live keep their `[…]` note on the
+  Nightscout site; LoopStack treats a missing marker as "no identifier".
+- Generated against the CI tree (pristine submodules + 01–08 with
+  `--whitespace=fix`) in a scratch clone. Verified: from a fully pristine
+  scratch tree (`git clean -fdx` in the superproject too — `profiles.loopcustomization`
+  is git-ignored and patch 07 creates it) the per-patch
+  `git apply --check` / `git apply` loop applies 01–09 in order; the local
+  `NightscoutService` working tree after applying 09 is byte-identical to the
+  scratch CI tree.
+- LoopStack (`Loopstack/src/lib/metabolism/carbAbsorption.ts`): new kind
+  `delayedMetabolicV1` whose `MODEL_KNEES` entry is the Swift
+  `DelayedMetabolicResponseAbsorption.knees` verbatim (checked by script:
+  the nine (t, p) pairs parsed from the Swift file equal the TS pairs);
+  `absorptionPatternFromNotes` parses the `[<name>-v<N>]` marker from the
+  Nightscout treatment notes; `modelKindForEntry` mirrors
+  `CarbEntry.resolvedAbsorptionModel(default:)` — identifier first
+  (`delayed-metabolic-v1` → the new curve, `standard-v1` or an unknown
+  identifier → the global piecewise model even over a legacy marker), and
+  only a missing identifier reaches the untouched `modelKindForLabel` path.
+  `CarbEntry.absorptionPattern` is filled by the Nightscout data source from
+  `notes`; a sitting (`combineCarbEntries`) is delayed-metabolic if any entry
+  is, drops to the legacy label path if any entry has no identifier, and keeps
+  a pinned identifier only when every entry pins one. Preset naming shows
+  "12h 🥜 delayed" so it never reads as the legacy "12h 🥜".
+- LoopStack tests (`carbAbsorption.test.ts`, `mealCombining.test.ts`): knee
+  table equals the Swift table, strictly increasing in both axes from (0,0)
+  to (1,1), segment shares sum to 1 and the rate integrates to 1 at 12 h,
+  documented milestones (5% @ 1.5 h … 86% @ 9.6 h), monotone and inverse
+  round-trip at 1001 points each way, peak window 0.43–0.57 centred on 0.50
+  at 1.93× the mean rate, lags PiecewiseLinear at 25%/50%; marker parsing
+  (case-sensitive, ignores non-identifier brackets); resolver precedence;
+  sitting combination. Full suite: 41 files, 669 tests passed (`npm test`).
+- Not covered: HealthKit-sourced LoopStack entries still have no identifier.
+  Loop writes it to HealthKit metadata under
+  `com.loopkit.CarbKit.AbsorptionPatternIdentifier`, and LoopStack's
+  `ios/App/App/HealthDiabetesPlugin.swift` already forwards food type and
+  `com.loopkit.AbsorptionTime` from sample metadata, but not that key — a
+  small follow-up in the plugin plus `healthKitDataSource.ts`. Until then
+  HealthKit entries grade by legacy marker; Nightscout is the source now in
+  lockstep. No device run. Nothing pushed, no build triggered.
+- Build (October 21, 2026, local, Xcode 26.6): `xcodebuild -workspace
+  LoopWorkspace.xcworkspace -scheme LoopWorkspace -configuration Release
+  -destination generic/platform=iOS` with signing disabled, on the local tree
+  with patch 09 applied: **BUILD SUCCEEDED**; `NightscoutServiceKit/Extensions/SyncCarbObject.swift`
+  recompiled with no warnings, no compiler errors anywhere.
+
+## Second review of patch 09 + LoopStack, and new pre-meal icon (October 21, 2026)
+
+- Patch 09 reviewed: one `notes:` argument on the carb treatment, which
+  NightscoutKit's `CarbCorrectionNightscoutTreatment.init` already accepts.
+  Nothing in Loop, LoopKit or NightscoutService reads carb treatments or their
+  notes back, so the marker is upload-only and cannot reach dosing.
+- Patch loop re-run from pristine submodules (Loop `c2fddb76`, LoopKit
+  `1bdbe685`) with 01–09: every tracked and new file in Loop, LoopKit,
+  LoopOnboarding and NightscoutService is identical to the tree the LoopStack
+  session built.
+- LoopStack reviewed and committed locally as `6874797` (no git remote
+  exists, so nothing was pushed). Only the eight absorption-curve files were
+  committed; the unrelated in-progress DataChat / AI / BottomNav work was left
+  uncommitted. On a clean worktree of LoopStack `9a19cd3` with only those
+  eight files applied: 654 tests passed, `tsc --noEmit` clean.
+- **Pre-meal toolbar icon.** `OverrideAssetsLoop.xcassets/Pre-Meal.imageset`
+  and `Pre-Meal Selected.imageset` replace Loop's plate-with-timer icon with
+  the same fork and knife around a plate holding a down arrow (pre-meal lowers
+  the target), so it no longer reads as a second carb button. Loop's
+  `build-derived-assets.sh` copies this catalog over its own assets at build
+  time, so no Loop patch is involved. Vector PDFs on the original 40×40 pt
+  canvas, template rendering, generated by `tests/make-premeal-icons.swift`.
+  Not changed: the small pre-meal glyph in the status row (`Pre-Meal-symbol`),
+  the Watch and widget icons.
+  **Revert:** delete the two `Pre-Meal*.imageset` folders from
+  `OverrideAssetsLoop.xcassets`.
