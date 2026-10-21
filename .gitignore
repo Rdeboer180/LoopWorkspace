@@ -27,3 +27,6 @@ xcuserdata/
 *.playground
 playground.xcworkspace
 timeline.xctimeline
+
+# CUSTOM (rdeboer180): created by patches/07-profiles-pinned.patch at build time; never commit
+profiles.loopcustomization

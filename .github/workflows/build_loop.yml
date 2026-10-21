@@ -188,8 +188,16 @@ jobs:
           # -applies any patches located in the LoopWorkspace/patches/ directory
           # Fail the build if a customization no longer applies after an update.
           # Only patch files are input; documentation in patches/ is ignored.
-          git apply --check ./patches/*.patch
-          git apply ./patches/*.patch -v --whitespace=fix
+          # CUSTOM (rdeboer180): the patches are numbered and later ones build
+          # on earlier ones (08 edits lines that 01/03/05/06 introduced).
+          # `git apply --check a b c` checks every file against the UNPATCHED
+          # tree, so a dependent patch fails that check even though the real
+          # apply (which stacks in memory) succeeds. Check-then-apply one patch
+          # at a time, in order, and still fail the build on the first problem.
+          for patch in ./patches/*.patch; do
+            git apply --check "$patch" --whitespace=fix
+            git apply "$patch" -v --whitespace=fix
+          done
 
           # Submodule Loop patches:
           # Template for customizing submodule Loop (changes Loop app name to "CustomLoop")
@@ -212,9 +220,15 @@ jobs:
           #   the line following a "\" should not be blank
           /bin/bash -c "$(curl -fsSL \
           https://raw.githubusercontent.com/loopandlearn/lnl-scripts/main/CustomizationSelect.sh)" \
-          profiles \
           basal_lock \
           negative_insulin
+          # CUSTOM (rdeboer180): "profiles" removed from the list above because
+          # Profile Save & Load is now pinned locally as
+          # patches/07-profiles-pinned.patch (applied by the git apply step
+          # above, in both the manual and automatic workflows). The lnl script
+          # exits 1 when a customization is already applied, so listing it
+          # here would fail the build. To go back to the remote copy, delete
+          # patch 07 and re-add "profiles \" above basal_lock.
           # CUSTOM (rdeboer180): future_carbs_4h removed — its patch context
           # overlaps with patches/01-extend-carb-absorption-time-12h.patch and
           # cannot apply on top. The 1h -> 4h bump for maxCarbEntryFutureTime
