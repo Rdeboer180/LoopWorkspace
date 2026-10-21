@@ -216,8 +216,16 @@ jobs:
           # -applies any patches located in the LoopWorkspace/patches/ directory
           # Fail the build if a customization no longer applies after an update.
           # Only patch files are input; documentation in patches/ is ignored.
-          git apply --check ./patches/*.patch
-          git apply ./patches/*.patch -v --whitespace=fix
+          # CUSTOM (rdeboer180): the patches are numbered and later ones build
+          # on earlier ones (08 edits lines that 01/03/05/06 introduced).
+          # `git apply --check a b c` checks every file against the UNPATCHED
+          # tree, so a dependent patch fails that check even though the real
+          # apply (which stacks in memory) succeeds. Check-then-apply one patch
+          # at a time, in order, and still fail the build on the first problem.
+          for patch in ./patches/*.patch; do
+            git apply --check "$patch" --whitespace=fix
+            git apply "$patch" -v --whitespace=fix
+          done
 
           # Submodule Loop patches:
           # Template for customizing submodule Loop (changes Loop app name to "CustomLoop")
