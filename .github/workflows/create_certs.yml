@@ -22,7 +22,11 @@ jobs:
   create_certs:
     name: Certificates
     needs: validate
-    runs-on: macos-26
+    # CUSTOM (rdeboer180): macos-26 (arm64) jobs were not being acquired by GitHub
+    # ("not acquired by Runner of type hosted", arm64 capacity notice, 2026-10-21).
+    # macos-26-intel is the same macOS 26 image family with the same Xcode 26.5
+    # (17F42) and iOS 26.5 SDK, so the built app is unchanged. Revert: macos-26.
+    runs-on: macos-26-intel
     outputs:
       new_certificate_needed: ${{ steps.set_output.outputs.new_certificate_needed }}
   
@@ -91,7 +95,11 @@ jobs:
   nuke_certs:
       name: Nuke certificates
       needs: [validate, create_certs]
-      runs-on: macos-26
+      # CUSTOM (rdeboer180): macos-26 (arm64) jobs were not being acquired by GitHub
+      # ("not acquired by Runner of type hosted", arm64 capacity notice, 2026-10-21).
+      # macos-26-intel is the same macOS 26 image family with the same Xcode 26.5
+      # (17F42) and iOS 26.5 SDK, so the built app is unchanged. Revert: macos-26.
+      runs-on: macos-26-intel
       if: ${{ (needs.create_certs.outputs.new_certificate_needed == 'true' && vars.ENABLE_NUKE_CERTS == 'true') || vars.FORCE_NUKE_CERTS == 'true' }}
       steps:
         - name: Output from step id 'check_certs'
