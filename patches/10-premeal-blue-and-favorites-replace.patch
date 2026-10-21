@@ -1,0 +1,79 @@
+diff --git a/Loop/Loop/View Controllers/StatusTableViewController.swift b/Loop/Loop/View Controllers/StatusTableViewController.swift
+index 356f11cb..127ded41 100644
+--- a/Loop/Loop/View Controllers/StatusTableViewController.swift	
++++ b/Loop/Loop/View Controllers/StatusTableViewController.swift	
+@@ -278,7 +278,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
+     private lazy var carbsItem = makeToolbarItem(title: NSLocalizedString("Add Meal", comment: "The label of the carb entry button"), image: UIImage(named: "carbs"), tintColor: .carbTintColor, action: #selector(userTappedAddCarbs))
+     private lazy var bolusItem = makeToolbarItem(title: NSLocalizedString("Bolus", comment: "The label of the bolus entry button"), image: UIImage(named: "bolus"), tintColor: .insulinTintColor, action: #selector(presentBolusScreen))
+     private lazy var settingsItem = makeToolbarItem(title: NSLocalizedString("Settings", comment: "The label of the settings button"), image: UIImage(named: "settings"), tintColor: .secondaryLabel, action: #selector(onSettingsTapped))
+-    private lazy var preMealItem = makeToolbarItem(title: NSLocalizedString("Pre-Meal Targets", comment: "The label of the pre-meal mode toggle button"), image: UIImage.preMealImage(selected: false), tintColor: .carbTintColor, action: #selector(premealButtonTapped(_:)))
++    private lazy var preMealItem = makeToolbarItem(title: NSLocalizedString("Pre-Meal Targets", comment: "The label of the pre-meal mode toggle button"), image: UIImage.preMealImage(selected: false), tintColor: .glucoseTintColor, action: #selector(premealButtonTapped(_:))) // CUSTOM (rdeboer180): pre-meal uses the workout (heart) blue so it no longer reads as a second carb button. Revert: .carbTintColor
+     private lazy var workoutItem = makeToolbarItem(title: NSLocalizedString("Workout Targets", comment: "The label of the workout mode toggle button"), image: UIImage.workoutImage(selected: false), tintColor: .glucoseTintColor, action: #selector(toggleWorkoutMode(_:)))
+ 
+     private func makeToolbarItem(title: String, image: UIImage?, tintColor: UIColor, action: Selector) -> UIBarButtonItem {
+diff --git a/Loop/Loop/Views/FavoriteFoodsView.swift b/Loop/Loop/Views/FavoriteFoodsView.swift
+index ddc855b4..6af61bad 100644
+--- a/Loop/Loop/Views/FavoriteFoodsView.swift
++++ b/Loop/Loop/Views/FavoriteFoodsView.swift
+@@ -24,6 +24,7 @@ struct FavoriteFoodsView: View {
+     @State private var pendingImport: [FavoriteCSVRecord] = []
+     @State private var csvError: String?
+     @State private var exportDocument = FavoritesCSVDocument(text: "")
++    @State private var confirmReplaceAll = false // CUSTOM (rdeboer180): "Replace all" import confirmation
+ 
+     var body: some View {
+         NavigationView {
+@@ -54,7 +55,7 @@ struct FavoriteFoodsView: View {
+                             showExporter = true
+                         }
+                         Button("Import CSV") { showImporter = true }
+-                        Text("Import previews changes first. Matching IDs update favorites; omitted favorites stay in place.")
++                        Text("Import previews changes first. Merge updates matching IDs and keeps the rest; Replace all swaps your whole list for the file, in the file's order.")
+                             .font(.footnote).foregroundColor(.secondary)
+                     }
+                     Section {
+@@ -119,9 +120,21 @@ struct FavoriteFoodsView: View {
+                 Section {
+                     let updates = pendingImport.filter { row in viewModel.favoriteFoods.contains { $0.id == row.id } }.count
+                     Text("\(pendingImport.count - updates) new favorites, \(updates) updates")
+-                    Text("No existing favorite will be deleted. Review carb amounts, times and patterns before importing.")
++                    Text("Merge deletes nothing. Review carb amounts, times and patterns before importing.")
+                         .font(.footnote)
+                 }
++                // CUSTOM (rdeboer180): "Replace all" loads the file as the complete list,
++                // in file order, so a reorganized CSV (sections, dividers, removed
++                // duplicates) takes effect in one step. Merge only adds/updates and
++                // appends new rows at the end. Confirmation required. Revert: delete
++                // this Section, the confirmationDialog below and `confirmReplaceAll`.
++                Section {
++                    Button(role: .destructive) { confirmReplaceAll = true } label: {
++                        Text("Replace all \(viewModel.favoriteFoods.count) favorites with these \(pendingImport.count)")
++                    }
++                    Text("Removes every favorite not in this file. Export a CSV first if you want a backup.")
++                        .font(.footnote).foregroundColor(.secondary)
++                }
+                 Section("CSV favorites") {
+                     ForEach(pendingImport, id: \.id) { row in
+                         VStack(alignment: .leading) {
+@@ -137,10 +150,20 @@ struct FavoriteFoodsView: View {
+                 }
+             }
+             .navigationTitle("Import favorites")
++            .confirmationDialog("Replace all favorites?", isPresented: $confirmReplaceAll, titleVisibility: .visible) {
++                Button("Replace \(viewModel.favoriteFoods.count) with \(pendingImport.count)", role: .destructive) {
++                    viewModel.favoriteFoods = pendingImport.map(StoredFavoriteFood.init(csvRecord:))
++                    showImportPreview = false
++                    pendingImport = []
++                }
++                Button("Cancel", role: .cancel) {}
++            } message: {
++                Text("Your current list is replaced by the \(pendingImport.count) favorites in this file, in the file's order. This cannot be undone in the app.")
++            }
+             .toolbar {
+                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showImportPreview = false } }
+                 ToolbarItem(placement: .confirmationAction) {
+-                    Button("Import") {
++                    Button("Merge") { // CUSTOM (rdeboer180): was "Import"; renamed to distinguish it from Replace all
+                         var merged = viewModel.favoriteFoods
+                         for row in pendingImport {
+                             let food = StoredFavoriteFood(csvRecord: row)

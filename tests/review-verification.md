@@ -166,3 +166,27 @@ identifier"). No dosing change on either side.
   the Watch and widget icons.
   **Revert:** delete the two `Pre-Meal*.imageset` folders from
   `OverrideAssetsLoop.xcassets`.
+
+## Widget glucose "---" after the Modelv5 update, and patch 10 (October 21, 2026)
+
+- **Widget symptom:** after installing the first build with Modelv5, the
+  home-screen widget showed loop status, eventual glucose and basal (from the
+  app-group `StatusExtensionContext`) but "---" for current glucose. The
+  widget reads current glucose from LoopKit's shared Core Data store
+  (`StatusWidgetTimelineProvider` → `PersistenceController.controllerInAppGroupDirectory()`
+  → `GlucoseStore`). A failed open leaves the controller in an error state for
+  the life of that widget process, and a failed fetch is shown as "---".
+- **Cause:** the store's first lightweight migration (v4 → v5) ran while iOS
+  was relaunching both the app and the widget after the update; the widget's
+  controller lost that race. Confirmed by the fix: installing the next build
+  (fresh widget process, store already v5) restored glucose. It can recur
+  only on an update that changes LoopKit's Core Data model again; if it does,
+  installing any later build or restarting the phone clears it.
+- **Patch 10** (`patches/10-premeal-blue-and-favorites-replace.patch`, Loop):
+  pre-meal toolbar button tinted `.glucoseTintColor` (the workout heart's
+  blue) instead of `.carbTintColor`; Favorites CSV import preview gains
+  "Replace all", which loads the file as the complete list in file order
+  behind a confirmation dialog (merge is unchanged and renamed "Merge").
+  Revert: delete the patch file.
+- Patch loop 01–10 from pristine submodules reproduces the working tree
+  exactly.
