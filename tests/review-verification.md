@@ -190,3 +190,23 @@ identifier"). No dosing change on either side.
   Revert: delete the patch file.
 - Patch loop 01–10 from pristine submodules reproduces the working tree
   exactly.
+
+## Carb entry layout (October 23, 2026)
+
+- Order in the main card is now Amount → Time → Choose Favorite → Food Type
+  → Standard / 🥜 Delayed → Absorption Time, followed by Continue.
+  `patches/11-carb-entry-layout.patch` (Loop) moves upstream's Choose
+  Favorite row, unchanged, from the Favorite Foods card into the main card;
+  the card keeps "Save as favorite food". Same visibility rule (new entries,
+  experimental features on, at least one favorite).
+- LoopKit fork `07675d69`: `FoodTypeRow` back to the upstream look — 🍭 🌮 🍲
+  icons inline next to the 🍽️ plate, no time labels (2:30 / 4:00 / 6:00);
+  presets set the duration only, never the food text or absorption pattern.
+- A first attempt at patch 11 was generated against a wrong baseline (a
+  path-limited stash also removed patches 05/08 from that file) and would not
+  apply; a strict per-patch check caught it. Regenerated against the fresh CI
+  tree. Lesson: generate a patch only against a tree produced by the CI loop.
+- Verified: patches 01–11 apply from pristine submodules with failures
+  surfaced; the result matches the built tree (whitespace-insensitive);
+  LoopWorkspace scheme Release build succeeded with no warnings in the
+  changed files. Not checked on a device or simulator.

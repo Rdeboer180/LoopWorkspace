@@ -1,0 +1,115 @@
+diff --git a/Loop/Loop/Views/CarbEntryView.swift b/Loop/Loop/Views/CarbEntryView.swift
+index 559ad742..9327f9b0 100644
+--- a/Loop/Loop/Views/CarbEntryView.swift
++++ b/Loop/Loop/Views/CarbEntryView.swift
+@@ -118,9 +118,17 @@ struct CarbEntryView: View, HorizontalSizeClassOverride {
+             CardSectionDivider()
+             
+             DatePickerRow(date: $viewModel.time, isFocused: timeFocused, minimumDate: viewModel.minimumDate, maximumDate: viewModel.maximumDate)
+-            
++
+             CardSectionDivider()
+-            
++
++            // CUSTOM (rdeboer180): Choose Favorite sits directly above Food Type, so the
++            // order reads favorite → food type → Standard/Delayed → absorption time.
++            // Revert: delete these lines and restore the row in favoriteFoodsCard.
++            if showsChooseFavorite {
++                chooseFavoriteRow
++                CardSectionDivider()
++            }
++
+             FoodTypeRow(foodType: $viewModel.foodType, absorptionTime: $viewModel.absorptionTime, selectedDefaultAbsorptionTimeEmoji: $viewModel.selectedDefaultAbsorptionTimeEmoji, usesCustomFoodType: $viewModel.usesCustomFoodType, absorptionTimeWasEdited: $viewModel.absorptionTimeWasEdited, isFocused: foodTypeFocused, defaultAbsorptionTimes: viewModel.defaultAbsorptionTimes)
+             
+             CardSectionDivider()
+@@ -232,41 +240,8 @@ extension CarbEntryView {
+                 .padding(.horizontal, 26)
+             
+             VStack(spacing: 10) {
+-                if !viewModel.favoriteFoods.isEmpty {
+-                    VStack {
+-                        HStack {
+-                            Text("Choose Favorite:", comment: "The label for the row where you choose saved Favorite Food")
+-                            
+-                            let selectedFavorite = favoritedFoodTextFromIndex(viewModel.selectedFavoriteFoodIndex)
+-                            Text(selectedFavorite)
+-                                .minimumScaleFactor(0.8)
+-                                .frame(maxWidth: .infinity, alignment: .trailing)
+-                        }
+-                        
+-                        if expandedRow == .favoriteFoodSelection {
+-                            Picker(String(""), selection: $viewModel.selectedFavoriteFoodIndex) {
+-                                ForEach(-1..<viewModel.favoriteFoods.count, id: \.self) { index in
+-                                    Text(favoritedFoodTextFromIndex(index))
+-                                        .tag(index)
+-                                }
+-                            }
+-                            .pickerStyle(.wheel)
+-                        }
+-                    }
+-                    .onTapGesture {
+-                        withAnimation {
+-                            if expandedRow == .favoriteFoodSelection {
+-                                expandedRow = nil
+-                            }
+-                            else {
+-                                expandedRow = .favoriteFoodSelection
+-                            }
+-                        }
+-                    }
+-                    
+-                    CardSectionDivider()
+-                }
+-                
++                // CUSTOM (rdeboer180): Choose Favorite moved into the main card
++                // (`chooseFavoriteRow`); this card keeps only Save as favorite.
+                 Button(action: saveAsFavoriteFood) {
+                     Text("Save as favorite food", comment: "Button label for saving current carb entry as a new Favorite Food")
+                         .frame(maxWidth: .infinity)
+@@ -280,6 +255,46 @@ extension CarbEntryView {
+         }
+     }
+     
++    // CUSTOM (rdeboer180): same visibility rule as the favorites card it came from.
++    private var showsChooseFavorite: Bool {
++        isNewEntry && FeatureFlags.allowExperimentalFeatures && !viewModel.favoriteFoods.isEmpty
++    }
++
++    // CUSTOM (rdeboer180): upstream's Choose Favorite row, unchanged, now shown in mainCard.
++    private var chooseFavoriteRow: some View {
++        VStack {
++            HStack {
++                Text("Choose Favorite:", comment: "The label for the row where you choose saved Favorite Food")
++
++                let selectedFavorite = favoritedFoodTextFromIndex(viewModel.selectedFavoriteFoodIndex)
++                Text(selectedFavorite)
++                    .minimumScaleFactor(0.8)
++                    .frame(maxWidth: .infinity, alignment: .trailing)
++            }
++
++            if expandedRow == .favoriteFoodSelection {
++                Picker(String(""), selection: $viewModel.selectedFavoriteFoodIndex) {
++                    ForEach(-1..<viewModel.favoriteFoods.count, id: \.self) { index in
++                        Text(favoritedFoodTextFromIndex(index))
++                            .tag(index)
++                    }
++                }
++                .pickerStyle(.wheel)
++            }
++        }
++        .contentShape(Rectangle())
++        .onTapGesture {
++            withAnimation {
++                if expandedRow == .favoriteFoodSelection {
++                    expandedRow = nil
++                }
++                else {
++                    expandedRow = .favoriteFoodSelection
++                }
++            }
++        }
++    }
++
+     private func favoritedFoodTextFromIndex(_ index: Int) -> String {
+         if index == -1 {
+             return String(localized: "None", comment: "Indicates no favorite food is selected")
