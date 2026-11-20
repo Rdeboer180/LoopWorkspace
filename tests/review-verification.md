@@ -210,3 +210,37 @@ identifier"). No dosing change on either side.
   surfaced; the result matches the built tree (whitespace-insensitive);
   LoopWorkspace scheme Release build succeeded with no warnings in the
   changed files. Not checked on a device or simulator.
+
+## Preset reminders start automatically (November 20, 2026)
+
+- Before: reminders were notification-only by design (patch 08, "never
+  activates"). There was no setting that started a preset.
+- LoopKit fork: `RecurringPresetReminder.startsAutomatically`, default true.
+  Reminders saved by earlier builds decode as true. `latestOccurrence(atOrBefore:)`
+  returns the most recent scheduled local time.
+- `patches/12-preset-reminders-auto-start.patch` (Loop):
+  - The store is configured in `LoopAppManager.launchManagers`, so it also runs
+    when Loop is launched in the background. It was configured in
+    `StatusTableViewController.viewDidLoad`, which does not run in background
+    launches.
+  - After every loop (`LoopDataUpdated`) and on app activation, an auto-start
+    reminder whose latest time is at most 15 minutes old and not yet handled
+    starts its preset with the same call as the heart menu
+    (`createOverride(enactTrigger: .local)`), then posts "Started: …".
+  - If another override is set (active or scheduled), it is left alone and a
+    "Not started: …" notification is posted. If the same preset is already
+    running, nothing happens.
+  - Each scheduled time is handled once, so a preset you cancel is not
+    restarted. A time missed by more than 15 minutes (phone off, Loop not
+    running) is skipped, never started late. Saving a changed schedule marks
+    times already passed as handled.
+  - Auto-start reminders no longer schedule the calendar "Review preset"
+    notification; reminder-only ones still do.
+  - Editor gains "Start automatically" (on by default); the list shows
+    "Starts automatically" or "Reminder only".
+  - Fixed: foreground banners for reminder notifications. Patch 08 matched the
+    request identifier against the category name, which never matched.
+- Revert: delete patch 12 and set the LoopKit gitlink back to `07675d69`.
+- Harness: 3,079 checks pass (11 new: default on, upgrade of saved
+  reminders, reminder-only persistence, occurrence times incl. both 2026 DST
+  changes, disabled reminders).

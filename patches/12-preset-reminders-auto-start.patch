@@ -1,0 +1,278 @@
+diff --git a/Loop/Loop/Managers/LoopAppManager.swift b/Loop/Loop/Managers/LoopAppManager.swift
+index 1649c38d..f9e80017 100644
+--- a/Loop/Loop/Managers/LoopAppManager.swift
++++ b/Loop/Loop/Managers/LoopAppManager.swift
+@@ -214,6 +214,22 @@ class LoopAppManager: NSObject {
+ 
+         overrideHistory.delegate = self
+ 
++        // CUSTOM (rdeboer180): recurring preset reminders, configured at launch so auto-start
++        // also runs when Loop launches in the background (patch 12; patch 08 configured it in
++        // StatusTableViewController.viewDidLoad). Starts presets exactly like the heart menu.
++        // Revert: delete this block.
++        let reminderLoopManager = deviceDataManager.loopManager
++        Task { @MainActor in
++            PresetReminderStore.shared.configure(
++                presets: { [weak reminderLoopManager] in reminderLoopManager?.settings.overridePresets ?? [] },
++                currentOverride: { [weak reminderLoopManager] in reminderLoopManager?.settings.scheduleOverride },
++                startPreset: { [weak reminderLoopManager] preset, date in
++                    reminderLoopManager?.mutateSettings { settings in
++                        settings.scheduleOverride = preset.createOverride(enactTrigger: .local, beginningAt: date)
++                    }
++                })
++        }
++
+         SharedLogging.instance = loggingServicesManager
+ 
+         scheduleBackgroundTasks()
+@@ -527,6 +543,12 @@ extension LoopAppManager: DeviceOrientationController {
+ 
+ extension LoopAppManager: UNUserNotificationCenterDelegate {
+     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
++        // CUSTOM (rdeboer180): preset reminder requests carry their own identifiers, so match
++        // them by category to show the banner in the foreground (patch 12). Revert: delete.
++        if notification.request.content.categoryIdentifier == PresetReminderStore.notificationCategory {
++            completionHandler([.badge, .sound, .list, .banner])
++            return
++        }
+         switch notification.request.identifier {
+         // TODO: Until these notifications are converted to use the new alert system, they shall still show in the foreground
+         case LoopNotificationCategory.bolusFailure.rawValue,
+diff --git a/Loop/Loop/View Controllers/StatusTableViewController.swift b/Loop/Loop/View Controllers/StatusTableViewController.swift
+index 127ded41..8647c80e 100644
+--- a/Loop/Loop/View Controllers/StatusTableViewController.swift	
++++ b/Loop/Loop/View Controllers/StatusTableViewController.swift	
+@@ -48,8 +48,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
+     override func viewDidLoad() {
+ 
+         super.viewDidLoad()
+-        // CUSTOM (rdeboer180): recurring preset reminders need the live preset list. Revert: delete.
+-        PresetReminderStore.shared.configure(presets: { [weak manager = deviceManager.loopManager] in manager?.settings.overridePresets ?? [] })
+         
+         setupToolbarItems()
+         
+diff --git a/Loop/Loop/Views/PresetRemindersView.swift b/Loop/Loop/Views/PresetRemindersView.swift
+index e71a8fca..dc7f83ce 100644
+--- a/Loop/Loop/Views/PresetRemindersView.swift
++++ b/Loop/Loop/Views/PresetRemindersView.swift
+@@ -2,10 +2,12 @@
+ //  PresetRemindersView.swift
+ //  Loop
+ //
+-//  CUSTOM (rdeboer180): recurring weekday/time reminders to *review* a saved
+-//  override preset. Local notifications only; nothing is activated and no
+-//  therapy setting changes. Revert: delete this file, its pbxproj entry, the
+-//  Settings section, and the two StatusTableViewController lines.
++//  CUSTOM (rdeboer180): recurring weekday/time reminders for a saved override
++//  preset. Each reminder either starts the preset at its time (the default,
++//  patch 12) or only asks for a review. Never changes a therapy Profile.
++//  Revert: delete this file, its pbxproj entry, the Settings section, and the
++//  LoopAppManager configure call (patch 12; patch 08 had it in
++//  StatusTableViewController).
+ //
+ 
+ import SwiftUI
+@@ -26,6 +28,15 @@ final class PresetReminderStore: ObservableObject {
+     @Published var errorMessage: String?
+     private(set) var storageIsReadable = true
+     private var presets: () -> [TemporaryScheduleOverridePreset] = { [] }
++    // CUSTOM (rdeboer180): auto-start (patch 12). The override currently set in Loop
++    // (active or scheduled), and the same call Loop's heart menu uses to start a preset.
++    private var currentOverride: () -> TemporaryScheduleOverride? = { nil }
++    private var startPreset: (TemporaryScheduleOverridePreset, Date) -> Void = { _, _ in }
++    /// Start only within this long after the scheduled time; a later loop does not start it late.
++    nonisolated static let autoStartWindow: TimeInterval = 15 * 60
++    private static let handledKey = "com.loopkit.recurringPresetReminders.handled.v1"
++    /// Reminder ID → the latest scheduled time already started, skipped or passed over.
++    private var handled: [String: Date] = UserDefaults.standard.dictionary(forKey: PresetReminderStore.handledKey) as? [String: Date] ?? [:]
+     private var lastSignature = ""
+     private var observers = Set<AnyCancellable>()
+ 
+@@ -42,16 +53,100 @@ final class PresetReminderStore: ObservableObject {
+         }
+     }
+ 
+-    func configure(presets: @escaping () -> [TemporaryScheduleOverridePreset]) {
++    func configure(presets: @escaping () -> [TemporaryScheduleOverridePreset],
++                   currentOverride: @escaping () -> TemporaryScheduleOverride?,
++                   startPreset: @escaping (TemporaryScheduleOverridePreset, Date) -> Void) {
+         self.presets = presets
++        self.currentOverride = currentOverride
++        self.startPreset = startPreset
+         if observers.isEmpty {
++            // Loop posts LoopDataUpdated after every loop, in the background too, so due
++            // reminders are checked about every five minutes while Loop is running.
+             for name in [Notification.Name.LoopDataUpdated, UIApplication.didBecomeActiveNotification] {
+                 NotificationCenter.default.publisher(for: name).receive(on: RunLoop.main).sink { [weak self] _ in
+-                    Task { @MainActor in await self?.refreshIfNeeded() }
++                    Task { @MainActor in
++                        await self?.refreshIfNeeded()
++                        self?.startDueReminders()
++                    }
+                 }.store(in: &observers)
+             }
+         }
+-        Task { await refreshIfNeeded() }
++        Task {
++            await refreshIfNeeded()
++            startDueReminders()
++        }
++    }
++
++    // CUSTOM (rdeboer180): auto-start (patch 12). For each auto-start reminder whose
++    // latest scheduled time is within the window and not yet handled: start the preset
++    // unless another override is already set (active or scheduled), in which case it is
++    // left alone and a notification says so. Each scheduled time is handled once, so a
++    // preset you cancel is not restarted. Revert: delete this method and its calls.
++    func startDueReminders(now: Date = Date()) {
++        guard storageIsReadable, !busy else { return }
++        let available = presets()
++        var changed = false
++        for item in reminders where item.enabled && item.startsAutomatically {
++            guard let occurrence = item.latestOccurrence(atOrBefore: now) else { continue }
++            let key = item.id.uuidString
++            if let done = handled[key], done >= occurrence { continue }
++            handled[key] = occurrence; changed = true
++            // A time more than the window ago is marked handled but never started late.
++            guard now.timeIntervalSince(occurrence) <= Self.autoStartWindow else { continue }
++            guard let preset = available.first(where: { $0.id == item.presetID }) else { continue }
++            if let existing = currentOverride(), !existing.hasFinished(relativeTo: now) {
++                if case .preset(let running) = existing.context, running.id == preset.id { continue }
++                notify(item, title: "Not started: \(preset.symbol) \(preset.name)",
++                       body: "\(Self.describe(existing)) is already set in Loop, so it was left running. Start the preset from the heart if you want it.")
++                continue
++            }
++            startPreset(preset, now)
++            notify(item, title: "Started: \(preset.symbol) \(preset.name)",
++                   body: "Recurring preset, \(Self.time(item)). \(Self.ending(preset)) Cancel it from the heart in Loop.")
++        }
++        if changed { UserDefaults.standard.set(handled, forKey: Self.handledKey) }
++    }
++
++    /// Marks every reminder's latest scheduled time as handled, so a save never starts a time that already passed.
++    private func markPassedOccurrences(_ values: [RecurringPresetReminder], now: Date = Date()) {
++        for item in values {
++            if let occurrence = item.latestOccurrence(atOrBefore: now) { handled[item.id.uuidString] = occurrence }
++            else { handled.removeValue(forKey: item.id.uuidString) }
++        }
++        handled = handled.filter { key, _ in values.contains { $0.id.uuidString == key } }
++        UserDefaults.standard.set(handled, forKey: Self.handledKey)
++    }
++
++    private func notify(_ item: RecurringPresetReminder, title: String, body: String) {
++        let content = UNMutableNotificationContent()
++        content.title = title
++        content.body = body
++        content.sound = .default
++        content.categoryIdentifier = Self.notificationCategory
++        content.userInfo = ["presetID": item.presetID.uuidString, "reminderID": item.id.uuidString]
++        // A unique identifier outside the scheduled-request prefix, so saving reminders never removes it.
++        let request = UNNotificationRequest(identifier: "loop.preset-autostart." + UUID().uuidString, content: content, trigger: nil)
++        UNUserNotificationCenter.current().add(request)
++    }
++
++    private static func time(_ item: RecurringPresetReminder) -> String { String(format: "%02d:%02d", item.hour, item.minute) }
++
++    private static func ending(_ preset: TemporaryScheduleOverridePreset) -> String {
++        switch preset.duration {
++        case .indefinite: return "It runs until you cancel it."
++        case .finite(let interval):
++            let f = DateComponentsFormatter(); f.allowedUnits = [.hour, .minute]; f.unitsStyle = .abbreviated
++            return "It ends on its own after \(f.string(from: interval) ?? "its set time")."
++        }
++    }
++
++    private static func describe(_ override: TemporaryScheduleOverride) -> String {
++        switch override.context {
++        case .preset(let p): return "\(p.symbol) \(p.name)"
++        case .preMeal: return "Pre-meal"
++        case .legacyWorkout: return "Workout"
++        case .custom: return "A custom override"
++        }
+     }
+ 
+     private func signature(_ values: [TemporaryScheduleOverridePreset]) -> String {
+@@ -98,7 +193,9 @@ final class PresetReminderStore: ObservableObject {
+         let pending = await center.pendingNotificationRequests()
+         let old = pending.filter { $0.identifier.hasPrefix(Self.prefix) }
+         var requests: [UNNotificationRequest] = []
+-        for item in values where item.enabled {
++        // CUSTOM (rdeboer180): auto-start reminders get their notification when Loop starts
++        // the preset (patch 12), so only reminder-only items are scheduled here.
++        for item in values where item.enabled && !item.startsAutomatically {
+             guard let preset = byID[item.presetID] else { continue }
+             for components in item.calendarComponents {
+                 let content = UNMutableNotificationContent()
+@@ -130,6 +227,7 @@ final class PresetReminderStore: ObservableObject {
+                 : "Reminders could not be scheduled. Your previous reminders were restored.")
+         }
+         UserDefaults.standard.set(data, forKey: Self.storageKey)
++        if reminders != values { markPassedOccurrences(values) } // CUSTOM (rdeboer180): patch 12
+         reminders = values
+         lastSignature = signature(available)
+     }
+@@ -150,7 +248,7 @@ struct PresetRemindersView: View {
+     var body: some View {
+         List {
+             Section {
+-                Text("Reminders follow local time and repeat on selected weekdays. They ask you to review a saved preset; they never activate it or change a therapy Profile.")
++                Text("Reminders follow local time and repeat on selected weekdays. With Start automatically on, Loop starts the preset within a few minutes of its time and notifies you. If another override is already set, it is left running and you are notified instead. A therapy Profile is never changed.")
+                     .font(.footnote)
+             }
+             Section("Recurring reminders") {
+@@ -160,7 +258,7 @@ struct PresetRemindersView: View {
+                     } label: {
+                         VStack(alignment: .leading, spacing: 4) {
+                             Text(presets.first(where: { $0.id == item.presetID }).map { $0.symbol + " " + $0.name } ?? "Preset removed")
+-                            Text(String(format: "%02d:%02d", item.hour, item.minute) + " · " + days(item.weekdays) + (item.enabled ? "" : " · Off"))
++                            Text(String(format: "%02d:%02d", item.hour, item.minute) + " · " + days(item.weekdays) + (item.enabled ? (item.startsAutomatically ? " · Starts automatically" : " · Reminder only") : " · Off"))
+                                 .font(.footnote).foregroundColor(.secondary)
+                         }.frame(minHeight: 44)
+                     }
+@@ -201,6 +299,7 @@ private struct PresetReminderEditor: View {
+     @State private var weekdays = Set<Int>()
+     @State private var time = Date()
+     @State private var enabled = true
++    @State private var startsAutomatically = true // CUSTOM (rdeboer180): patch 12
+     @State private var errorMessage: String?
+ 
+     var body: some View {
+@@ -215,6 +314,7 @@ private struct PresetReminderEditor: View {
+                     }
+                     DatePicker("Local time", selection: $time, displayedComponents: .hourAndMinute)
+                     Toggle("Enabled", isOn: $enabled)
++                    Toggle("Start automatically", isOn: $startsAutomatically) // CUSTOM (rdeboer180): patch 12
+                 }
+                 Section("Repeat on") {
+                     ForEach([2,3,4,5,6,7,1], id: \.self) { day in
+@@ -223,7 +323,11 @@ private struct PresetReminderEditor: View {
+                             set: { if $0 { weekdays.insert(day) } else { weekdays.remove(day) } }))
+                     }
+                 }
+-                Section { Text("Review the preset in Loop when notified. No preset or Profile will start automatically.").font(.footnote) }
++                Section {
++                    Text(startsAutomatically
++                         ? "Loop starts the preset within a few minutes of this time (only while Loop is running) and notifies you. It won't replace another override that is already set. Cancel it from the heart."
++                         : "You get a notification to review the preset. Nothing starts automatically.").font(.footnote)
++                }
+             }
+             .navigationTitle(existing == nil ? "New reminder" : "Edit reminder")
+             .toolbar {
+@@ -236,6 +340,7 @@ private struct PresetReminderEditor: View {
+                 presetID = existing?.presetID ?? presets.first?.id
+                 weekdays = existing?.weekdays ?? []
+                 enabled = existing?.enabled ?? true
++                startsAutomatically = existing?.startsAutomatically ?? true
+                 if let existing {
+                     time = Calendar.current.date(bySettingHour: existing.hour, minute: existing.minute, second: 0, of: Date()) ?? Date()
+                 }
+@@ -250,7 +355,8 @@ private struct PresetReminderEditor: View {
+         guard let presetID else { return }
+         let c = Calendar.current.dateComponents([.hour, .minute], from: time)
+         let item = RecurringPresetReminder(id: existing?.id ?? UUID(), presetID: presetID, weekdays: weekdays,
+-                                          hour: c.hour ?? 0, minute: c.minute ?? 0, enabled: enabled)
++                                          hour: c.hour ?? 0, minute: c.minute ?? 0, enabled: enabled,
++                                          startsAutomatically: startsAutomatically)
+         var values = store.reminders
+         if let index = values.firstIndex(where: { $0.id == item.id }) { values[index] = item }
+         else { values.append(item) }

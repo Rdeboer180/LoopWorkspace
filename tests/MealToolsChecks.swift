@@ -81,6 +81,36 @@ struct MealToolsChecks {
         require(invalid.calendarComponents.isEmpty, "Disabled reminders must schedule nothing")
         let restored = try JSONDecoder().decode(RecurringPresetReminder.self, from: JSONEncoder().encode(reminder))
         require(restored == reminder, "Schedule identity and timing must survive relaunch")
+
+        // Auto-start: on by default, and reminders saved before the field existed decode as auto-start.
+        require(reminder.startsAutomatically, "New reminders start their preset automatically")
+        var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(reminder)) as! [String: Any]
+        legacy.removeValue(forKey: "startsAutomatically")
+        let upgraded = try JSONDecoder().decode(RecurringPresetReminder.self, from: JSONSerialization.data(withJSONObject: legacy))
+        require(upgraded.startsAutomatically && upgraded.presetID == reminder.presetID, "Older saved reminders upgrade to auto-start")
+        var manual = reminder; manual.startsAutomatically = false
+        try require(try JSONDecoder().decode(RecurringPresetReminder.self, from: JSONEncoder().encode(manual)) == manual, "Reminder-only choice must survive relaunch")
+
+        // Latest occurrence, local wall time (Mon/Wed/Fri 09:30), in a DST zone.
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "America/Indiana/Indianapolis")!
+        func at(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
+            cal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))!
+        }
+        // 2026-11-16 is a Monday.
+        require(reminder.latestOccurrence(atOrBefore: at(2026, 11, 16, 9, 30), calendar: cal) == at(2026, 11, 16, 9, 30), "Occurrence counts at the exact minute")
+        require(reminder.latestOccurrence(atOrBefore: at(2026, 11, 16, 9, 44), calendar: cal) == at(2026, 11, 16, 9, 30), "Later the same day returns today's time")
+        require(reminder.latestOccurrence(atOrBefore: at(2026, 11, 16, 9, 29), calendar: cal) == at(2026, 11, 13, 9, 30), "Before the time on Monday returns Friday's")
+        require(reminder.latestOccurrence(atOrBefore: at(2026, 11, 17, 23, 0), calendar: cal) == at(2026, 11, 16, 9, 30), "Tuesday returns Monday's")
+        require(reminder.latestOccurrence(atOrBefore: at(2026, 11, 22, 12, 0), calendar: cal) == at(2026, 11, 20, 9, 30), "Sunday returns Friday's")
+        // DST: 2026-11-01 (Sun) falls back; 2026-03-08 (Sun) springs forward at 02:00.
+        let sunday = RecurringPresetReminder(presetID: UUID(), weekdays: [1], hour: 9, minute: 30)
+        require(sunday.latestOccurrence(atOrBefore: at(2026, 11, 1, 10, 0), calendar: cal) == at(2026, 11, 1, 9, 30), "Fall-back day keeps 09:30 local")
+        let early = RecurringPresetReminder(presetID: UUID(), weekdays: [1], hour: 2, minute: 30)
+        if let skipped = early.latestOccurrence(atOrBefore: at(2026, 3, 8, 4, 0), calendar: cal) {
+            require(cal.isDate(skipped, inSameDayAs: at(2026, 3, 8, 12, 0)) && skipped <= at(2026, 3, 8, 4, 0), "Skipped 02:30 moves later the same day")
+        } else { require(false, "Spring-forward day still has an occurrence") }
+        var off = reminder; off.enabled = false
+        require(off.latestOccurrence(atOrBefore: at(2026, 11, 16, 10, 0), calendar: cal) == nil, "Disabled reminders never occur")
     }
 
     // MARK: - 🥜 Delayed metabolic response curve
