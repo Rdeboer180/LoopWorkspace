@@ -608,9 +608,9 @@ index 00000000..7a13f551
 +            if identifier == MealAbsorptionPattern.delayedMetabolicV1 {
 +                let preview = DelayedMetabolicResponsePreview()
 +                let peak = preview.peakAbsorptionWindow(after: duration)
-+                let mean = preview.averageLateResponse(after: duration)
-+                let range = preview.observedTimingRange(after: duration)
-+                Text("Loop will model the fastest absorption \(hours(peak.lowerBound))–\(hours(peak.upperBound)) after eating, centered on \(hours(mean)) (the average late rise seen on \(DelayedMetabolicResponsePreview.sampleCount) evenings; observed spread \(hours(range.lowerBound))–\(hours(range.upperBound))).")
++                let half = preview.absorbed(0.5, after: duration)
++                let most = preview.absorbed(0.9, after: duration)
++                Text("Loop will model the fastest absorption \(hours(peak.lowerBound))–\(hours(peak.upperBound)) after eating, half absorbed by \(hours(half)) and 90% by \(hours(most)) (measured on \(DelayedMetabolicResponsePreview.sampleCount) dessert nights).")
 +                    .font(.footnote)
 +                Text("Timing scales with the selected duration. This changes this entry's carb prediction and dosing. Glucose rises are not measured carb absorption, and a strong early rise still absorbs the entry early.")
 +                    .font(.footnote).foregroundColor(.secondary)
